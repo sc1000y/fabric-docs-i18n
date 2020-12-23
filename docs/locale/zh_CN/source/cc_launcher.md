@@ -1,70 +1,44 @@
-# External Builders and Launchers
+# 外部构建器和启动器
 
-Prior to Hyperledger Fabric 2.0, the process used to build and launch chaincode was part of the peer implementation and could not be easily customized. All chaincode installed on the peer would be "built" using language specific logic hard coded in the peer. This build process would generate a Docker container image that would be launched to execute chaincode that connected as a client to the peer.
+在 Hyperledger Fabric 2.0 之前，构建和启动链码的过程都是 peer 实现的一部分，不能轻易自定义。Peer 节点上安装的所有链码都将使用 Peer 节点中硬编码的语言特定逻辑来“构建”。该构建过程将生成一个 Docker 容器镜像，该镜像将被启动为一个连接到 Peer 节点的客户端来执行链码。
 
-This approach limited chaincode implementations to a handful of languages, required Docker to be part of the deployment environment, and prevented running chaincode as a long running server process.
+该方法限制了链码只能由少数语言实现，需要 Docker 作为部署环境的一部分并且阻碍了将链码作为一个长期运行的服务进程。
 
-Starting with Fabric 2.0, External Builders and Launchers address these limitations by enabling operators to extend the peer with programs that can build, launch, and discover chaincode. To leverage this capability you will need to create your own buildpack and then modify the peer core.yaml to include a new `externalBuilder` configuration element which lets the peer know an external builder is available. The following sections describe the details of this process.
+从 Fabric 2.0 开始，外部构建器和启动器通过支持操作者使用可以构建、启动和发现链码的程序扩展 peer 从而解决了这些限制。要使用这个功能，你需要创建你自己的构建包并修改 peer 的 core.yaml 文件使其包含一个新的 `externalBuilder` 配置元素，该配置可以使 Peer 节点知道外部构建器是可用的。后边的章节详细介绍了这个过程。
 
-Note that if no configured external builder claims a chaincode package, the peer will attempt to process the package as if it were created with the standard Fabric packaging tools such as the peer CLI or node SDK.
+注意，如果没有已配置的外部构建器声明链码包，peer 将尝试处理链码包，就好像链码包是由标准的 Fabric 打包工具（比如，peer CLI 或者 node SDK）创建的一样。
 
-## External builder model
+**注意：** 这是一个高级特性，可能会需要自定义的 peer 镜像包。例如，下面的示例中使用的 `go` 和 `bash`，这些并没有包含在官方 `fabric-peer` 镜像中。
 
-**Note:** This is an advanced feature that will likely require custom packaging of the peer image. For example, the following samples use `go` and `bash`, which are not included in the current official `fabric-peer` image.
+## 外部构建模型
 
-Hyperledger Fabric External Builders and Launchers are loosely based on Heroku [Buildpacks](https://devcenter.heroku.com/articles/buildpack-api). A buildpack implementation is simply a collection of programs or scripts that transform application artifacts into something that can run. The buildpack model has been adapted for chaincode packages and extended to support chaincode execution and discovery.
 
-## External builder model
+Hyperledger Fabric 外部构建器和启动器不严格地基于 Heroku [Buildpacks](https://devcenter.heroku.com/articles/buildpack-api)。一个构件包的实现是简单的程序或脚本的集合，这些程序或脚本会将应用程序构件转换为可以运行的东西。构建包模型适用于链码包，并且扩展支持链码执行和发现。
 
-### External builder and launcher API
+### 外部构建器和启动器 API
 
-Hyperledger Fabric External Builders and Launchers are loosely based on Heroku [Buildpacks](https://devcenter.heroku.com/articles/buildpack-api). A buildpack implementation is simply a collection of programs or scripts that transform application artifacts into something that can run. The buildpack model has been adapted for chaincode packages and extended to support chaincode execution and discovery.
+外部构建器和启动器由四段代码或者脚本组成：
 
-An external builder and launcher consists of four programs or scripts:
-
-### External builder and launcher API
-
-- `bin/detect`: Determine whether or not this buildpack should be used to build the chaincode package and launch it.
-- `bin/build`: Transform the chaincode package into executable chaincode.
-- `bin/release` (optional): Provide metadata to the peer about the chaincode.
-- `bin/run` (optional): Run the chaincode.
-
-An external builder and launcher consists of four programs or scripts:
+- `bin/detect`： 决定该构建包是否用于构建链码包并启动它。
+- `bin/build`： 将链码包转换为可执行链码。
+- `bin/release` （可选）： 向 peer 提供链码相关元数据。
+- `bin/run` （可选）： 运行链码。
 
 #### `bin/detect`
 
-- `bin/detect`: Determine whether or not this buildpack should be used to build the chaincode package and launch it.
-- `bin/build`: Transform the chaincode package into executable chaincode.
-- `bin/release` (optional): Provide metadata to the peer about the chaincode.
-- `bin/run` (optional): Run the chaincode.
-
-The `bin/detect` script is responsible for determining whether or not a buildpack should be used to build a chaincode package and launch it. The peer invokes `detect` with two arguments:
-
-#### `bin/detect`
+`bin/detect` 脚本负责决定该构建包是否用于构建链码包并启动它。peer 调用 `detect` 需要两个参数： 
 
 ```sh
 bin/detect CHAINCODE_SOURCE_DIR CHAINCODE_METADATA_DIR
 ```
 
-The `bin/detect` script is responsible for determining whether or not a buildpack should be used to build a chaincode package and launch it. The peer invokes `detect` with two arguments:
+当调用 `detect` 的时候，`CHAINCODE_SOURCE_DIR` 目录下包含链码源码， `CHAINCODE_METADATA_DIR` 目录包含 `metadata.json` 文件，这些文件都来自 peer 上安装的链码包。`CHAINCODE_SOURCE_DIR` 和 `CHAINCODE_METADATA_DIR` 应该被视为只读输入。如果构建包要被应用到链码源码包，`detect` 必须返回退出代码 `0`；任何其他退出代码都表示构建包不能被应用。
 
-When `detect` is invoked, `CHAINCODE_SOURCE_DIR` contains the chaincode source and `CHAINCODE_METADATA_DIR` contains the `metadata.json` file from the chaincode package installed to the peer. The `CHAINCODE_SOURCE_DIR` and `CHAINCODE_METADATA_DIR` should be treated as read only inputs. If the buildpack should be applied to the chaincode source package, `detect` must return an exit code of `0`; any other exit code will indicate that the buildpack should not be applied.
-
-```sh
-bin/detect CHAINCODE_SOURCE_DIR CHAINCODE_METADATA_DIR
-```
-
-The following is an example of a simple `detect` script for go chaincode:
+下边是一个简单的 go 链码 `detect` 脚本示例：
 ```sh
 #!/bin/bash
-
-When `detect` is invoked, `CHAINCODE_SOURCE_DIR` contains the chaincode source and `CHAINCODE_METADATA_DIR` contains the `metadata.json` file from the chaincode package installed to the peer. The `CHAINCODE_SOURCE_DIR` and `CHAINCODE_METADATA_DIR` should be treated as read only inputs. If the buildpack should be applied to the chaincode source package, `detect` must return an exit code of `0`; any other exit code will indicate that the buildpack should not be applied.
 
 CHAINCODE_METADATA_DIR="$2"
-
-The following is an example of a simple `detect` script for go chaincode:
-```sh
-#!/bin/bash
 
 # use jq to extract the chaincode type from metadata.json and exit with
 # success if the chaincode type is golang
@@ -72,57 +46,29 @@ if [ "$(jq -r .type "$CHAINCODE_METADATA_DIR/metadata.json" | tr '[:upper:]' '[:
     exit 0
 fi
 
-CHAINCODE_METADATA_DIR="$2"
-
 exit 1
 ```
 
-# use jq to extract the chaincode type from metadata.json and exit with
-# success if the chaincode type is golang
-if [ "$(jq -r .type "$CHAINCODE_METADATA_DIR/metadata.json" | tr '[:upper:]' '[:lower:]')" = "golang" ]; then
-    exit 0
-fi
-
 #### `bin/build`
 
-exit 1
-```
-
-The `bin/build` script is responsible for building, compiling, or transforming the contents of a chaincode package into artifacts that can be used by `release` and `run`. The peer invokes `build` with three arguments:
-
-#### `bin/build`
+`bin/build` 脚本负责构建、编译或者转换链码包的内容为可以让 `release` 和 `run` 使用的构件。peer 调用 `build` 需要三个参数： 
 
 ```sh
 bin/build CHAINCODE_SOURCE_DIR CHAINCODE_METADATA_DIR BUILD_OUTPUT_DIR
 ```
 
-The `bin/build` script is responsible for building, compiling, or transforming the contents of a chaincode package into artifacts that can be used by `release` and `run`. The peer invokes `build` with three arguments:
+当调用 `build` 的时候，`CHAINCODE_SOURCE_DIR` 指向链码源码， `CHAINCODE_METADATA_DIR` 指向 `metadata.json` 文件，这些文件都来自 peer 上安装的链码包。`BUILD_OUTPUT_DIR` 是 `build` 必须放置 `release` 和 `run` 需要的构件的目录。构件脚本应该将 `CHAINCODE_SOURCE_DIR` 和 `CHAINCODE_METADATA_DIR` 看作是只读的，但 `BUILD_OUTPUT_DIR` 是可写的。
 
-When `build` is invoked, `CHAINCODE_SOURCE_DIR` contains the chaincode source and `CHAINCODE_METADATA_DIR` contains the `metadata.json` file from the chaincode package installed to the peer. `BUILD_OUTPUT_DIR` is the directory where `build` must place artifacts needed by `release` and `run`. The build script should treat the input directories `CHAINCODE_SOURCE_DIR` and `CHAINCODE_METADATA_DIR` as read only, but the `BUILD_OUTPUT_DIR` is writeable.
+当 `build` 以退出代码 `0` 完成时，`BUILD_OUTPUT_DIR` 中的内容将被复制到 peer 管理的持久存储中；任何其他退出代码都认为是失败。
 
-```sh
-bin/build CHAINCODE_SOURCE_DIR CHAINCODE_METADATA_DIR BUILD_OUTPUT_DIR
-```
-
-When `build` completes with an exit code of `0`, the contents of `BUILD_OUTPUT_DIR` will be copied to the persistent storage maintained by the peer; any other exit code will be considered a failure.
-
-When `build` is invoked, `CHAINCODE_SOURCE_DIR` contains the chaincode source and `CHAINCODE_METADATA_DIR` contains the `metadata.json` file from the chaincode package installed to the peer. `BUILD_OUTPUT_DIR` is the directory where `build` must place artifacts needed by `release` and `run`. The build script should treat the input directories `CHAINCODE_SOURCE_DIR` and `CHAINCODE_METADATA_DIR` as read only, but the `BUILD_OUTPUT_DIR` is writeable.
-
-The following is an example of a simple `build` script for go chaincode:
-
-When `build` completes with an exit code of `0`, the contents of `BUILD_OUTPUT_DIR` will be copied to the persistent storage maintained by the peer; any other exit code will be considered a failure.
+以下是一个简单的 go 链码 `build` 脚本示例：
 
 ```sh
 #!/bin/bash
-
-The following is an example of a simple `build` script for go chaincode:
 
 CHAINCODE_SOURCE_DIR="$1"
 CHAINCODE_METADATA_DIR="$2"
 BUILD_OUTPUT_DIR="$3"
-
-```sh
-#!/bin/bash
 
 # extract package path from metadata.json
 GO_PACKAGE_PATH="$(jq -r .path "$CHAINCODE_METADATA_DIR/metadata.json")"
@@ -133,81 +79,38 @@ else
     GO111MODULE=off go build -v  -o "$BUILD_OUTPUT_DIR/chaincode" "$GO_PACKAGE_PATH"
 fi
 
-CHAINCODE_SOURCE_DIR="$1"
-CHAINCODE_METADATA_DIR="$2"
-BUILD_OUTPUT_DIR="$3"
-
 # save statedb index metadata to provide at release
 if [ -d "$CHAINCODE_SOURCE_DIR/META-INF" ]; then
     cp -a "$CHAINCODE_SOURCE_DIR/META-INF" "$BUILD_OUTPUT_DIR/"
 fi
 ```
 
-# extract package path from metadata.json
-GO_PACKAGE_PATH="$(jq -r .path "$CHAINCODE_METADATA_DIR/metadata.json")"
-if [ -f "$CHAINCODE_SOURCE_DIR/src/go.mod" ]; then
-    cd "$CHAINCODE_SOURCE_DIR/src"
-    go build -v -mod=readonly -o "$BUILD_OUTPUT_DIR/chaincode" "$GO_PACKAGE_PATH"
-else
-    GO111MODULE=off go build -v  -o "$BUILD_OUTPUT_DIR/chaincode" "$GO_PACKAGE_PATH"
-fi
-
 #### `bin/release`
 
-# save statedb index metadata to provide at release
-if [ -d "$CHAINCODE_SOURCE_DIR/META-INF" ]; then
-    cp -a "$CHAINCODE_SOURCE_DIR/META-INF" "$BUILD_OUTPUT_DIR/"
-fi
-```
-
-The `bin/release` script is responsible for providing chaincode metadata to the peer. `bin/release` is optional. If it is not provided, this step is skipped. The peer invokes `release` with two arguments:
-
-#### `bin/release`
+`bin/release` 脚本负责向 peer 节点提供链码元数据。`bin/release` 是可选的。如果没有提供，则跳过该步骤。peer 节点使用两个参数调用 `release`：
 
 ```sh
 bin/release BUILD_OUTPUT_DIR RELEASE_OUTPUT_DIR
 ```
 
-The `bin/release` script is responsible for providing chaincode metadata to the peer. `bin/release` is optional. If it is not provided, this step is skipped. The peer invokes `release` with two arguments:
+当调用 `release` 时，`BUILD_OUTPUT_DIR` 包含由 `build` 程序填充的构建，应该被视为只读输入。 `RELEASE_OUTPUT_DIR` 是 `release` 必须放置的由 peer 使用的构建的目录。
 
-When `release` is invoked, `BUILD_OUTPUT_DIR` contains the artifacts populated by the `build` program and should be treated as read only input. `RELEASE_OUTPUT_DIR` is the directory where `release` must place artifacts to be consumed by the peer.
+`release` 完成后，peer 节点将从 `RELEASE_OUTPUT_DIR` 中消耗两种类型的元数据：
 
-```sh
-bin/release BUILD_OUTPUT_DIR RELEASE_OUTPUT_DIR
-```
+- CouchDB 的状态数据库索引定义
+- 外部链码服务器连接信息（`chaincode/server/connection.json`）
 
-When `release` completes, the peer will consume two types of metadata from `RELEASE_OUTPUT_DIR`:
+如果链码需要 CouchDB 索引定义，`release` 负责将索引放置到 `RELEASE_OUTPUT_DIR` 下的 `statedb/couchdb/indexes` 目录中。索引必须有 `.json` 扩展。 有关详细信息，请参阅 [CouchDB indexes](couchdb_as_state_database.html#couchdb-indexes) 文档。
 
-When `release` is invoked, `BUILD_OUTPUT_DIR` contains the artifacts populated by the `build` program and should be treated as read only input. `RELEASE_OUTPUT_DIR` is the directory where `release` must place artifacts to be consumed by the peer.
+在使用链码服务器实现的情况下，`release` 负责用与链码服务器地址以及和链码通信所需的任何 TLS 资产来填充 `chaincode/server/connection.json`。当服务器连接信息提供给 peer 节点时，`run` 将不会被调用。 有关详细信息，请参阅 [ChaincodeServer](https://jira.hyperledger.org/browse/FAB-14086) 文档。
 
-- state database index definitions for CouchDB
-- external chaincode server connection information (`chaincode/server/connection.json`)
-
-When `release` completes, the peer will consume two types of metadata from `RELEASE_OUTPUT_DIR`:
-
-If CouchDB index definitions are required for the chaincode, `release` is responsible for placing the indexes into the `statedb/couchdb/indexes` directory under `RELEASE_OUTPUT_DIR`. The indexes must have a `.json` extension.  See the [CouchDB indexes](couchdb_as_state_database.html#couchdb-indexes) documentation for details.
-
-- state database index definitions for CouchDB
-- external chaincode server connection information (`chaincode/server/connection.json`)
-
-In cases where a chaincode server implementation is used, `release` is responsible for populating `chaincode/server/connection.json` with the address of the chaincode server and any TLS assets required to communicate with the chaincode. When server connection information is provided to the peer, `run` will not be called. See the [Chaincode Server](https://jira.hyperledger.org/browse/FAB-14086) documentation for details.
-
-If CouchDB index definitions are required for the chaincode, `release` is responsible for placing the indexes into the `statedb/couchdb/indexes` directory under `RELEASE_OUTPUT_DIR`. The indexes must have a `.json` extension.  See the [CouchDB indexes](couchdb_as_state_database.html#couchdb-indexes) documentation for details.
-
-The following is an example of a simple `release` script for go chaincode:
-
-In cases where a chaincode server implementation is used, `release` is responsible for populating `chaincode/server/connection.json` with the address of the chaincode server and any TLS assets required to communicate with the chaincode. When server connection information is provided to the peer, `run` will not be called. See the [Chaincode Server](https://jira.hyperledger.org/browse/FAB-14086) documentation for details.
+以下是一个简单的 go 链码 `release` 脚本示例：
 
 ```sh
 #!/bin/bash
-
-The following is an example of a simple `release` script for go chaincode:
 
 BUILD_OUTPUT_DIR="$1"
 RELEASE_OUTPUT_DIR="$2"
-
-```sh
-#!/bin/bash
 
 # copy indexes from META-INF/* to the output directory
 if [ -d "$BUILD_OUTPUT_DIR/META-INF" ] ; then
@@ -215,63 +118,32 @@ if [ -d "$BUILD_OUTPUT_DIR/META-INF" ] ; then
 fi
 ```
 
-BUILD_OUTPUT_DIR="$1"
-RELEASE_OUTPUT_DIR="$2"
-
 #### `bin/run`
 
-# copy indexes from META-INF/* to the output directory
-if [ -d "$BUILD_OUTPUT_DIR/META-INF" ] ; then
-   cp -a "$BUILD_OUTPUT_DIR/META-INF/"* "$RELEASE_OUTPUT_DIR/"
-fi
-```
-
-The `bin/run` script is responsible for running chaincode. The peer invokes `run` with two arguments:
-
-#### `bin/run`
+`bin/run` 脚本负责运行链码。 peer 节点使用两个参数调用 `run`：
 
 ```sh
 bin/run BUILD_OUTPUT_DIR RUN_METADATA_DIR
 ```
 
-The `bin/run` script is responsible for running chaincode. The peer invokes `run` with two arguments:
+当 `run` 被调用时，`BUILD_OUTPUT_DIR` 包含由 `build` 程序填充的构建，以及一个名为 `chaincode.json` 的文件填充 `RUN_METADATA_DIR`，该文件包含了 chaincode 连接和注册 peer 节点所必需的信息。请注意，`bin/run` 脚本应该将这些 `BUILD_OUTPUT_DIR` 和 `RUN_METADATA_DIR`目录视为只读输入。 `chaincode.json` 中包含的密钥是：
 
-When `run` is called, `BUILD_OUTPUT_DIR` contains the artifacts populated by the `build` program and `RUN_METADATA_DIR` is populated with a file called `chaincode.json` that contains the information necessary for chaincode to connect and register with the peer. Note that the `bin/run` script should treat these `BUILD_OUTPUT_DIR` and `RUN_METADATA_DIR` directories as read only input.  The keys included in `chaincode.json` are:
+- `chaincode_id`：和链码包关联的唯一 ID。
+- `peer_address`：被 peer 节点托管的 `ChaincodeSupport` 的 gRPC 服务器端点的以 `host:port` 为格式的地址。 
+- `client_cert`：当链码建立与 peer 节点的连接时，必须使用 peer 节点生成的 PEM 编码的 TLS 客户端证书。
+- `client_key`：当链码建立与 peer 节点的连接时，必须使用 peer 节点生成的 PEM 编码的客户端密钥。
+- `root_cert`：由 peer 服务器托管的 `ChaincodeSupport` 的 gRPC 服务器端点的 PEM 编码的 TLS 根证书。
+- `mspid`：peer 节点的本地 mspid。
 
-```sh
-bin/run BUILD_OUTPUT_DIR RUN_METADATA_DIR
-```
-
-- `chaincode_id`: The unique ID associated with the chaincode package.
-- `peer_address`: The address in `host:port` format of the `ChaincodeSupport` gRPC server endpoint hosted by the peer.
-- `client_cert`: The PEM encoded TLS client certificate generated by the peer that must be used when the chaincode establishes its connection to the peer.
-- `client_key`: The PEM encoded client key generated by the peer that must be used when the chaincode establishes its connection to the peer.
-- `root_cert`: The PEM encoded TLS root certificate for the `ChaincodeSupport` gRPC server endpoint hosted by the peer.
-- `mspid`: The local mspid of the peer.
-
-When `run` is called, `BUILD_OUTPUT_DIR` contains the artifacts populated by the `build` program and `RUN_METADATA_DIR` is populated with a file called `chaincode.json` that contains the information necessary for chaincode to connect and register with the peer. Note that the `bin/run` script should treat these `BUILD_OUTPUT_DIR` and `RUN_METADATA_DIR` directories as read only input.  The keys included in `chaincode.json` are:
-
-When `run` terminates, the peer considers the chaincode terminated. If another request arrives for the chaincode, the peer will attempt to start another instance of the chaincode by invoking `run` again. The contents of `chaincode.json` must not be cached across invocations.
-
-- `chaincode_id`: The unique ID associated with the chaincode package.
-- `peer_address`: The address in `host:port` format of the `ChaincodeSupport` gRPC server endpoint hosted by the peer.
-- `client_cert`: The PEM encoded TLS client certificate generated by the peer that must be used when the chaincode establishes its connection to the peer.
-- `client_key`: The PEM encoded client key generated by the peer that must be used when the chaincode establishes its connection to the peer.
-- `root_cert`: The PEM encoded TLS root certificate for the `ChaincodeSupport` gRPC server endpoint hosted by the peer.
-- `mspid`: The local mspid of the peer.
+当 `run` 终止时，peer 节点认为链码终止。如果对链码的另一个请求到达，peer 节点将通过再次调用`run` 来尝试启动链码的另一个实例。在调用之间不得缓存 `chaincode.json` 的内容。
 
 The following is an example of a simple `run` script for go chaincode:
+以下是一个简单的 go 链码 `run` 脚本示例：
 ```sh
 #!/bin/bash
-
-When `run` terminates, the peer considers the chaincode terminated. If another request arrives for the chaincode, the peer will attempt to start another instance of the chaincode by invoking `run` again. The contents of `chaincode.json` must not be cached across invocations.
 
 BUILD_OUTPUT_DIR="$1"
 RUN_METADATA_DIR="$2"
-
-The following is an example of a simple `run` script for go chaincode:
-```sh
-#!/bin/bash
 
 # setup the environment expected by the go chaincode shim
 export CORE_CHAINCODE_ID_NAME="$(jq -r .chaincode_id "$RUN_METADATA_DIR/chaincode.json")"
@@ -281,9 +153,6 @@ export CORE_TLS_CLIENT_KEY_FILE="$RUN_METADATA_DIR/client.key"
 export CORE_PEER_TLS_ROOTCERT_FILE="$RUN_METADATA_DIR/root.crt"
 export CORE_PEER_LOCALMSPID="$(jq -r .mspid "$RUN_METADATA_DIR/chaincode.json")"
 
-BUILD_OUTPUT_DIR="$1"
-RUN_METADATA_DIR="$2"
-
 # populate the key and certificate material used by the go chaincode shim
 jq -r .client_cert "$RUN_METADATA_DIR/chaincode.json" > "$CORE_TLS_CLIENT_CERT_FILE"
 jq -r .client_key  "$RUN_METADATA_DIR/chaincode.json" > "$CORE_TLS_CLIENT_KEY_FILE"
@@ -292,61 +161,17 @@ if [ -z "$(jq -r .client_cert "$RUN_METADATA_DIR/chaincode.json")" ]; then
     export CORE_PEER_TLS_ENABLED="false"
 fi
 
-# setup the environment expected by the go chaincode shim
-export CORE_CHAINCODE_ID_NAME="$(jq -r .chaincode_id "$RUN_METADATA_DIR/chaincode.json")"
-export CORE_PEER_TLS_ENABLED="true"
-export CORE_TLS_CLIENT_CERT_FILE="$RUN_METADATA_DIR/client.crt"
-export CORE_TLS_CLIENT_KEY_FILE="$RUN_METADATA_DIR/client.key"
-export CORE_PEER_TLS_ROOTCERT_FILE="$RUN_METADATA_DIR/root.crt"
-export CORE_PEER_LOCALMSPID="$(jq -r .mspid "$RUN_METADATA_DIR/chaincode.json")"
-
 # exec the chaincode to replace the script with the chaincode process
 exec "$BUILD_OUTPUT_DIR/chaincode" -peer.address="$(jq -r .peer_address "$ARTIFACTS/chaincode.json")"
 ```
 
-# populate the key and certificate material used by the go chaincode shim
-jq -r .client_cert "$RUN_METADATA_DIR/chaincode.json" > "$CORE_TLS_CLIENT_CERT_FILE"
-jq -r .client_key  "$RUN_METADATA_DIR/chaincode.json" > "$CORE_TLS_CLIENT_KEY_FILE"
-jq -r .root_cert   "$RUN_METADATA_DIR/chaincode.json" > "$CORE_PEER_TLS_ROOTCERT_FILE"
-if [ -z "$(jq -r .client_cert "$RUN_METADATA_DIR/chaincode.json")" ]; then
-    export CORE_PEER_TLS_ENABLED="false"
-fi
+## 配置外部构建器和启动器
 
-## Configuring external builders and launchers
+配置 peer 节点以使用外部构建器涉及在定义外部构建器的 `core.yaml` 中的链码配置块下添加一个外部构建器元素。 每个外部构建器定义必须包括一个名称（用于日志记录）和包含构建器脚本的 `bin` 目录的父目录的路径。
 
-# exec the chaincode to replace the script with the chaincode process
-exec "$BUILD_OUTPUT_DIR/chaincode" -peer.address="$(jq -r .peer_address "$ARTIFACTS/chaincode.json")"
-```
+还可以提供一个可选的环境变量名列表，以便在调用外部构建器脚本时从 peer 节点传播。
 
-Configuring the peer to use external builders involves adding an externalBuilder element under the chaincode configuration block in the  `core.yaml` that defines external builders. Each external builderdefinition must include a name (used for logging) and the path to parent of the `bin` directory containing the builder scripts.
-
-## Configuring external builders and launchers
-
-An optional list of environment variable names to propagate from the peer when invoking the external builder scripts can also be provided.
-
-Configuring the peer to use external builders involves adding an externalBuilder element under the chaincode configuration block in the  `core.yaml` that defines external builders. Each external builder definition must include a name (used for logging) and the path to parent of the `bin` directory containing the builder scripts.
-
-The following example defines two external builders:
-
-An optional list of environment variable names to propagate from the peer when invoking the external builder scripts can also be provided.
-
-```yaml
-chaincode:
-  externalBuilders:
-  - name: my-golang-builder
-    path: /builders/golang
-    environmentWhitelist:
-    - GOPROXY
-    - GONOPROXY
-    - GOSUMDB
-    - GONOSUMDB
-  - name: noop-builder
-    path: /builders/binary
-```
-
-The following example defines two external builders:
-
-In this example, the implementation of "my-golang-builder" is contained within the `/builders/golang` directory and its build scripts are located in `/builders/golang/bin`. When the peer invokes any of the build scripts associated with "my-golang-builder", it will propagate only the values of the environment variables in the whitelist.
+以下为定义了两个外部构建器的示例：
 
 ```yaml
 chaincode:
@@ -362,76 +187,42 @@ chaincode:
     path: /builders/binary
 ```
 
-Note: The following environment variables are always propagated to external builders:
+在此示例中，“my-golang-builder“的实现包含在 `/builders/golang` 目录中，其构建脚本位于 `/builders/golang/bin` 中。 当 peer 节点调用与“my-golang-builder”关联的任何构建脚本时，它将只传播在 `propagateEnvironment` 中环境变量的值。
 
-In this example, the implementation of "my-golang-builder" is contained within the `/builders/golang` directory and its build scripts are located in `/builders/golang/bin`. When the peer invokes any of the build scripts associated with "my-golang-builder", it will propagate only the values of the environment variables in the `propagateEnvironment`.
-
-- LD_LIBRARY_PATH
-- LIBPATH
-- PATH
-- TMPDIR
-
-Note: The following environment variables are always propagated to external builders:
-
-When an `externalBuilder` configuration is present, the peer will iterate over the list of builders in the order provided, invoking `bin/detect` until one completes successfully. If no builder completes `detect` successfully, the peer will fallback to using the legacy Docker build process implemented within the peer. This means that external builders are completely optional.
+注意：以下环境变量总是传播到外部构建器：
 
 - LD_LIBRARY_PATH
 - LIBPATH
 - PATH
 - TMPDIR
 
-In the example above, the peer will attempt to use "my-golang-builder", followed by "noop-builder", and finally the peer internal build process.
+当存在 `externalBuilder` 配置时，peer 节点将按照提供的顺序遍历构建器列表，调用 `bin/detect`，直到成功完成为止。 如果没有构建器成功完成 `detect`，则 peer 节点将返回使用在 peer 节点中实现的遗留 Docker 构建过程。 这意味着外部构建器是完全可选的。
 
-When an `externalBuilder` configuration is present, the peer will iterate over the list of builders in the order provided, invoking `bin/detect` until one completes successfully. If no builder completes `detect` successfully, the peer will fallback to using the legacy Docker build process implemented within the peer. This means that external builders are completely optional.
+在上面的示例中，peer 节点将尝试使用“my-golang-builder”，其次是“noop-builder”，最后是 peer 内部构建过程。
+## 链码包
 
-## Chaincode packages
+作为 Fabric2.0 引入的新生命周期的一部分，链码包格式从序列化协议缓冲区消息更改为 gzip 压缩 POSIX 磁盘存档。 通过 `peer lifecycle chaincode package` 创建的链码包使用此新格式。
+### 生命周期链码包内容
 
-In the example above, the peer will attempt to use "my-golang-builder", followed by "noop-builder", and finally the peer internal build process.
+生命周期链码包包含两个文件。 第一个文件 `code.tar.gz` 是一个 gzip 压缩 POSIX 磁带存档。此文件包括链码的源构件。由 peer CLI 创建的包将链码实现源置于 `src` 目录下，链码元数据（如 CouchDB 索引）置于 `META-INF` 目录下。
 
-As part of the new lifecycle introduced with Fabric 2.0, the chaincode package format changed from serialized protocol buffer messages to a gzip compressed POSIX tape archive. Chaincode packages created with `peer lifecycle chaincode package` use this new format.
+第二个文件，`metadata.json` 是一个JSON文档，有三个键：
+- `type`： 链码类型（例如，GOLANG、JAVA、NODE）
+- `path`： go 链码有关的，GOPATH 或者 GOMOD 到 main 链码包的相关的路径；其他类型合约不需要定义
+- `label`：用于生成 包 id 的链码标签，新链码生命周期过程通过此包 id 来识别。
 
-## Chaincode packages
+请注意，`type` 和 `path` 字段仅由 docker 平台构建使用。
 
-### Lifecycle chaincode package contents
+### 链码包和外部构建器
 
-As part of the new lifecycle introduced with Fabric 2.0, the chaincode package format changed from serialized protocol buffer messages to a gzip compressed POSIX tape archive. Chaincode packages created with `peer lifecycle chaincode package` use this new format.
+当链码包安装到 peer 节点时，`code.tar.gz` 和 `metadata.json` 的内容在调用外部构建器之前不被处理，除了被新生命周期进程用来计算包 id 的 `label` 字段。 这为用户就如何打包外部构建器以及启动器处理的源文件和元数据提供了很大的灵活性。
 
-A lifecycle chaincode package contains two files. The first file, `code.tar.gz` is a gzip compressed POSIX tape archive. This file includes the source artifacts for the chaincode. Packages created by the peer CLI will place the chaincode implementation source under the `src` directory and chaincode metadata (like CouchDB indexes) under the `META-INF` directory.
+例如，可以构建一个自定义链码包，该包包含 `code.tar.gz` 中的预编译链码实现以及一个 `metadata.json` 文件。 允许 _binary buildpack_ 检测自定义包，验证二进制文件的 hash，并将程序运行为链码。
 
-### Lifecycle chaincode package contents
+另一个例子是一个链码包，它只包含状态数据库索引定义和外部启动程序连接到正在运行的链码服务器所需的数据。 在这种情况下，`build` 进程只是从进程中提取元数据，并且 `release` 将它呈现给 peer 节点。
 
-The second file, `metadata.json` is a JSON document with three keys:
-- `type`: the chaincode type (e.g. GOLANG, JAVA, NODE)
-- `path`: for go chaincode, the GOPATH or GOMOD relative path to the main chaincode package; undefined for other types
-- `label`: the chaincode label that is used to generate the package-id by which the package is identified within the new chaincode lifecycle process.
+唯一的要求是 `code.tar.gz` 只能包含常规文件和目录条目，并且条目不能包含可能导致文件写入链码包逻辑根之外的路径。
 
-A lifecycle chaincode package contains two files. The first file, `code.tar.gz` is a gzip compressed POSIX tape archive. This file includes the source artifacts for the chaincode. Packages created by the peer CLI will place the chaincode implementation source under the `src` directory and chaincode metadata (like CouchDB indexes) under the `META-INF` directory.
-
-Note that the `type` and `path` fields are only utilized by docker platform builds.
-
-The second file, `metadata.json` is a JSON document with three keys:
-- `type`: the chaincode type (e.g. GOLANG, JAVA, NODE)
-- `path`: for go chaincode, the GOPATH or GOMOD relative path to the main chaincode package; undefined for other types
-- `label`: the chaincode label that is used to generate the package-id by which the package is identified within the new chaincode lifecycle process.
-
-### Chaincode packages and external builders
-
-Note that the `type` and `path` fields are only utilized by docker platform builds.
-
-When a chaincode package is installed to a peer, the contents of `code.tar.gz` and `metadata.json` are not processed prior to calling external builders, except for the `label` field that is used by the new lifecycle process to compute the package id. This affords users a great deal of flexibility in how they package source and metadata that will be processed by external builders and launchers.
-
-### Chaincode packages and external builders
-
-For example, a custom chaincode package could be constructed that contains a pre-compiled, implementation of chaincode in `code.tar.gz` with a `metadata.json` that allows a _binary buildpack_ to detect the custom package, validate the hash of the binary, and run the program as chaincode.
-
-When a chaincode package is installed to a peer, the contents of `code.tar.gz` and `metadata.json` are not processed prior to calling external builders, except for the `label` field that is used by the new lifecycle process to compute the package id. This affords users a great deal of flexibility in how they package source and metadata that will be processed by external builders and launchers.
-
-Another example would be a chaincode package that only contains state database index definitions and the data necessary for an external launcher to connect to a running chaincode server. In this case, the `build` process would simply extract the metadata from the process and `release` would present it to the peer.
-
-For example, a custom chaincode package could be constructed that contains a pre-compiled, implementation of chaincode in `code.tar.gz` with a `metadata.json` that allows a _binary buildpack_ to detect the custom package, validate the hash of the binary, and run the program as chaincode.
-
-The only requirements are that `code.tar.gz` can only contain regular file and directory entries, and that the entries cannot contain paths that would result in files being written outside of the logical root of the chaincode package.
-
-Another example would be a chaincode package that only contains state database index definitions and the data necessary for an external launcher to connect to a running chaincode server. In this case, the `build` process would simply extract the metadata from the process and `release` would present it to the peer.
-
-The only requirements are that `code.tar.gz` can only contain regular file and directory entries, and that the entries cannot contain paths that would result in files being written outside of the logical root of the chaincode package.
+<!---
+Licensed under Creative Commons Attribution 4.0 International License https://creativecommons.org/licenses/by/4.0/
+-->
